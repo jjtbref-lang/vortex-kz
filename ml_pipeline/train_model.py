@@ -1,37 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AuraAI Kazakhstan — Machine Learning Training & Export Pipeline
-Competition: GREENHACK KAZAKHSTAN 2026 (Track: Artificial Intelligence & Data Engineering)
+VORTEX Kazakhstan — Пайплайн загрузки реальных архивных данных и обучения ML-ядра (VortexPredict)
+Конкурс: GREENHACK KAZAKHSTAN 2026
 
-Trains a multi-city atmospheric PM2.5 forecasting ensemble on raw observable
-meteorological, temporal, topographic, and emission-control features:
-  - temperature (°C)
-  - wind_speed (m/s)
-  - inversion_height (m)
-  - humidity (%)
-  - hour_of_day (0..23)
-  - is_weekend (0/1)
-  - coal_abatement_pct (0..100%)
-  - nmu_abatement_pct (0..100%)
-  - basin_trapping_idx (topographic valley confinement index)
+Источник данных:
+  1. Open-Meteo Air Quality API (спутниковый реанализ Copernicus CAMS):
+     почасовые измерения pm2_5, pm10, carbon_monoxide, nitrogen_dioxide
+  2. Open-Meteo Historical Weather Archive API (реанализ ERA5):
+     почасовые измерения temperature_2m, wind_speed_10m, surface_pressure
+  Локация: г. Алматы (43.2389° N, 76.8897° E, Asia/Almaty)
+  Отопительный сезон: 2025-12-01 — 2026-02-28 (2 160 реальных почасовых наблюдений)
 
-Benchmarks Ridge Linear Baseline, Random Forest, and Gradient Boosting Regressor,
-saves CSV dataset + holdout validation metrics (MAE, RMSE, R2), and exports the
-trained Gradient Boosting decision trees to `artifacts/aura_gbm_model.js` for
-real-time browser inference in the Dark GIS Situational Dashboard.
+Фиксированная конфигурация ансамбля:
+  GradientBoostingRegressor(n_estimators=100, max_depth=5, random_state=42)
 """
 
 from __future__ import annotations
 
 import json
 import sys
+import urllib.request
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -40,115 +37,148 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 ARTIFACTS_DIR = BASE_DIR / "artifacts"
 
+ALMATY_LAT = 43.2389
+ALMATY_LON = 76.8897
+START_DATE = "2025-12-01"
+END_DATE = "2026-02-28"
+TIMEZONE = "Asia%2FAlmaty"
+
+AIR_QUALITY_URL = (
+    "https://air-quality-api.open-meteo.com/v1/air-quality"
+    f"?latitude={ALMATY_LAT}&longitude={ALMATY_LON}"
+    f"&start_date={START_DATE}&end_date={END_DATE}"
+    "&hourly=pm2_5,pm10,carbon_monoxide,nitrogen_dioxide"
+    f"&timezone={TIMEZONE}"
+)
+
+WEATHER_ARCHIVE_URL = (
+    "https://archive-api.open-meteo.com/v1/archive"
+    f"?latitude={ALMATY_LAT}&longitude={ALMATY_LON}"
+    f"&start_date={START_DATE}&end_date={END_DATE}"
+    "&hourly=temperature_2m,wind_speed_10m,surface_pressure"
+    f"&timezone={TIMEZONE}"
+)
+
+N_ESTIMATORS = 100
+MAX_DEPTH = 5
+RANDOM_STATE = 42
+
 FEATURE_COLUMNS = [
-    "temperature",          # Ambient air temperature at 2m (°C)
-    "wind_speed",           # Wind speed at 10m (m/s)
-    "inversion_height",     # Thermal inversion lid height (m)
-    "humidity",             # Relative humidity (%)
-    "hour_of_day",          # Hour of day (0..23)
-    "is_weekend",           # Weekend indicator (0 or 1)
-    "coal_abatement_pct",   # Gasification & top-down stove optimization (0..100%)
-    "nmu_abatement_pct",    # NMU-2 industrial & heavy traffic dispatch (0..100%)
-    "basin_trapping_idx",   # Topographic valley trapping factor
+    "temperature_2m",
+    "wind_speed_ms",
+    "surface_pressure",
+    "carbon_monoxide",
+    "nitrogen_dioxide",
+    "hour_of_day",
+    "day_of_year",
+    "is_weekend",
+    "inversion_height_m",
+    "temp_24h_mean",
+    "pressure_24h_mean",
+    "co_6h_mean",
+    "no2_6h_mean",
+    "co_24h_mean",
+    "no2_24h_mean",
 ]
 
-CITY_PROFILES = {
-    "almaty":    {"basin": 1.38, "temp_mean": -4.0,  "wind_mean": 1.2, "inv_mean": 280},
-    "astana":    {"basin": 0.98, "temp_mean": -14.0, "wind_mean": 2.8, "inv_mean": 410},
-    "oskemen":   {"basin": 1.32, "temp_mean": -11.5, "wind_mean": 1.4, "inv_mean": 305},
-    "karaganda": {"basin": 1.15, "temp_mean": -12.0, "wind_mean": 2.2, "inv_mean": 345},
-    "temirtau":  {"basin": 1.28, "temp_mean": -12.4, "wind_mean": 1.9, "inv_mean": 320},
-    "shymkent":  {"basin": 0.72, "temp_mean": 4.5,   "wind_mean": 3.5, "inv_mean": 620},
-}
+
+def _get_json(url: str) -> dict:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "VORTEX-KZ-Pipeline/1.0",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
-def build_kazakhstan_dataset(n_samples_per_city: int = 1400, seed: int = 2026) -> pd.DataFrame:
+def fetch_real_historical_data() -> pd.DataFrame:
     """
-    Builds an 8,400-row multi-city hourly dataset calibrated to winter & autumn
-    atmospheric monitoring profiles of Kazakhstan (Kazhydromet / AirKaz / CAMS).
+    Выгружает реальные почасовые измерения аэрозолей/газов (Copernicus CAMS)
+    и метеопараметров (ERA5) над Алматы за зиму 2025–2026 гг. и объединяет их по времени.
     """
-    rng = np.random.default_rng(seed)
-    frames = []
+    aq_payload = _get_json(AIR_QUALITY_URL)
+    wx_payload = _get_json(WEATHER_ARCHIVE_URL)
 
-    for city_name, prof in CITY_PROFILES.items():
-        idx = np.arange(n_samples_per_city)
-        hour_of_day = idx % 24
-        day_of_week = (idx // 24) % 7
-        is_weekend = (day_of_week >= 5).astype(int)
+    if "hourly" not in aq_payload or "hourly" not in wx_payload:
+        raise RuntimeError("Некорректный ответ API Open-Meteo: отсутствует блок 'hourly'.")
 
-        # Realistic temperature with synoptic cold waves (-28C..+12C) & diurnal cycle
-        diurnal_temp = -3.6 * np.cos(2 * np.pi * (hour_of_day - 3) / 24.0)
-        synoptic_wave = 8.5 * np.sin(idx / 58.0) + rng.normal(0, 2.5, n_samples_per_city)
-        temperature = np.round(prof["temp_mean"] + diurnal_temp + synoptic_wave, 1)
+    df_aq = pd.DataFrame(aq_payload["hourly"])
+    df_wx = pd.DataFrame(wx_payload["hourly"])
 
-        # Wind speed (0.4 .. 8.5 m/s)
-        wind_speed = rng.gamma(shape=2.2, scale=prof["wind_mean"] / 2.2, size=n_samples_per_city)
-        wind_speed = np.clip(np.round(wind_speed, 2), 0.4, 8.5)
+    df = pd.merge(df_aq, df_wx, on="time", how="inner")
+    df = df.sort_values("time").reset_index(drop=True)
+    df = df.ffill().bfill()
 
-        # Thermal inversion height (130 .. 920 m) — lifts midday, compresses at night
-        solar_lift = 185.0 * np.exp(-((hour_of_day - 14.0) ** 2) / 9.0)
-        inversion_height = prof["inv_mean"] + solar_lift + 26.0 * wind_speed + rng.normal(0, 42.0, n_samples_per_city)
-        inversion_height = np.clip(np.round(inversion_height, 0), 130.0, 920.0)
+    ts = pd.to_datetime(df["time"])
+    df["city"] = "almaty"
+    df["latitude"] = ALMATY_LAT
+    df["longitude"] = ALMATY_LON
 
-        # Relative humidity (%)
-        humidity = np.clip(np.round(75.0 - 0.5 * diurnal_temp + rng.normal(0, 7.0, n_samples_per_city), 1), 30.0, 96.0)
+    # Перевод скорости ветра из км/ч (стандарт архива Open-Meteo) в м/с
+    df["wind_speed_ms"] = (df["wind_speed_10m"] / 3.6).round(2)
+    df["hour_of_day"] = ts.dt.hour
+    df["day_of_year"] = ts.dt.day_of_year
+    df["is_weekend"] = (ts.dt.day_of_week >= 5).astype(int)
 
-        # Policy / intervention levels sampled across full 0..100% range
-        coal_abatement_pct = np.round(rng.uniform(0.0, 100.0, n_samples_per_city), 1)
-        nmu_abatement_pct = np.round(rng.uniform(0.0, 100.0, n_samples_per_city), 1)
+    # Диагностическая высота приземного слоя перемешивания / температурной инверсии (м)
+    solar_curve = np.exp(-((df["hour_of_day"] - 14.0) ** 2) / 9.0)
+    pressure_excess = np.maximum(0.0, df["surface_pressure"] - 925.0)
+    df["inversion_height_m"] = np.clip(
+        235.0
+        + 215.0 * solar_curve
+        + 46.0 * df["wind_speed_ms"]
+        - 6.0 * pressure_excess
+        + 3.8 * df["temperature_2m"],
+        120.0,
+        950.0,
+    ).round(1)
 
-        # Underlying atmospheric physics & anthropogenic emission dynamics:
-        # 1. Sub-zero heating surge (households burn more coal as T drops below +10C)
-        heating_demand = np.clip((15.0 - temperature) / 22.0, 0.22, 1.65)
+    # Синоптическая инерция воздушной массы и газовых трассеров горения (без утечки PM2.5/PM10)
+    df["temp_24h_mean"] = df["temperature_2m"].rolling(24, min_periods=1).mean().round(2)
+    df["pressure_24h_mean"] = df["surface_pressure"].rolling(24, min_periods=1).mean().round(2)
+    df["co_6h_mean"] = df["carbon_monoxide"].rolling(6, min_periods=1).mean().round(1)
+    df["no2_6h_mean"] = df["nitrogen_dioxide"].rolling(6, min_periods=1).mean().round(2)
+    df["co_24h_mean"] = df["carbon_monoxide"].rolling(24, min_periods=1).mean().round(1)
+    df["no2_24h_mean"] = df["nitrogen_dioxide"].rolling(24, min_periods=1).mean().round(2)
 
-        # 2. Bi-modal coal stoking + rush-hour schedule (peaks at 08:00 and 21:00, minimum at 14:00)
-        morning_peak = 0.44 * np.exp(-((hour_of_day - 8.0) ** 2) / 5.0)
-        evening_peak = 0.76 * np.exp(-((hour_of_day - 21.0) ** 2) / 8.0)
-        midday_dip = -0.18 * np.exp(-((hour_of_day - 14.0) ** 2) / 6.5)
-        diurnal_factor = 0.68 + morning_peak + evening_peak + midday_dip
-
-        # 3. Source emissions modulated by coal gasification & NMU industrial/traffic controls
-        # Switching private coal stoves to natural gas / top-down burn cuts stove PM2.5 by up to 75%
-        coal_emission = 48.0 * heating_demand * (1.0 - 0.75 * (coal_abatement_pct / 100.0))
-        ind_traffic_emission = (34.0 * (1.0 - 0.14 * is_weekend)) * (1.0 - 0.62 * (nmu_abatement_pct / 100.0))
-
-        # 4. Atmospheric dispersion (wind + inversion mixing height + hygroscopic growth)
-        wind_disp = (1.65 / np.maximum(0.45, wind_speed)) ** 0.52
-        inv_disp = (330.0 / inversion_height) ** 0.50
-        hygro_factor = 1.0 + 0.15 * np.clip((humidity - 65.0) / 30.0, 0.0, 1.0)
-
-        pm25 = (
-            (coal_emission + ind_traffic_emission)
-            * diurnal_factor
-            * prof["basin"]
-            * wind_disp
-            * inv_disp
-            * hygro_factor
-            + rng.normal(0, 3.8, n_samples_per_city)
-        )
-        pm25 = np.clip(np.round(pm25, 1), 6.0, 330.0)
-
-        frames.append(pd.DataFrame({
-            "city": city_name,
-            "temperature": temperature,
-            "wind_speed": wind_speed,
-            "inversion_height": inversion_height,
-            "humidity": humidity,
-            "hour_of_day": hour_of_day,
-            "is_weekend": is_weekend,
-            "coal_abatement_pct": coal_abatement_pct,
-            "nmu_abatement_pct": nmu_abatement_pct,
-            "basin_trapping_idx": prof["basin"],
-            "pm25": pm25,
-        }))
-
-    return pd.concat(frames, ignore_index=True)
+    ordered_cols = [
+        "time",
+        "city",
+        "latitude",
+        "longitude",
+        "pm2_5",
+        "pm10",
+        "carbon_monoxide",
+        "nitrogen_dioxide",
+        "temperature_2m",
+        "wind_speed_10m",
+        "wind_speed_ms",
+        "surface_pressure",
+        "hour_of_day",
+        "day_of_year",
+        "is_weekend",
+        "inversion_height_m",
+        "temp_24h_mean",
+        "pressure_24h_mean",
+        "co_6h_mean",
+        "no2_6h_mean",
+        "co_24h_mean",
+        "no2_24h_mean",
+    ]
+    return df[ordered_cols]
 
 
-def export_gbm_to_js(gbm: GradientBoostingRegressor, metrics_report: dict, out_path: Path) -> None:
+def export_vortex_gbm_to_js(
+    gbm: GradientBoostingRegressor,
+    metrics_report: dict,
+    out_path: Path,
+) -> None:
     """
-    Exports all trained decision trees of GradientBoostingRegressor into a fast,
-    zero-dependency JavaScript inference file (`window.predictPM25WithGBM`).
+    Экспортирует ансамбль VortexPredict (100 деревьев, max_depth=5)
+    в автономный браузерный модуль `window.VORTEX_ML_ENGINE`.
     """
     init_pred = float(gbm.init_.constant_[0][0])
     lr = float(gbm.learning_rate)
@@ -158,22 +188,25 @@ def export_gbm_to_js(gbm: GradientBoostingRegressor, metrics_report: dict, out_p
         tree = stage[0].tree_
         nodes = []
         for i in range(tree.node_count):
-            nodes.append([
-                int(tree.children_left[i]),
-                int(tree.children_right[i]),
-                int(tree.feature[i]),
-                round(float(tree.threshold[i]), 4),
-                round(float(tree.value[i][0][0]), 4),
-            ])
+            nodes.append(
+                [
+                    int(tree.children_left[i]),
+                    int(tree.children_right[i]),
+                    int(tree.feature[i]),
+                    round(float(tree.threshold[i]), 4),
+                    round(float(tree.value[i][0][0]), 4),
+                ]
+            )
         serialized_trees.append(nodes)
 
     payload = {
-        "model_name": "AuraPredict GradientBoostingRegressor",
-        "framework": "scikit-learn 1.x",
-        "version": "3.1.0-trl4",
+        "model_name": "VortexPredict GradientBoostingRegressor",
+        "framework": "scikit-learn",
+        "version": "4.0.0-cams-real",
         "n_estimators": len(serialized_trees),
         "max_depth": int(gbm.max_depth),
         "learning_rate": lr,
+        "random_state": RANDOM_STATE,
         "dataset_rows": metrics_report["dataset_rows"],
         "base_score": round(init_pred, 4),
         "features": FEATURE_COLUMNS,
@@ -184,23 +217,24 @@ def export_gbm_to_js(gbm: GradientBoostingRegressor, metrics_report: dict, out_p
     }
 
     js_code = (
-        "// AUTO-GENERATED BY ml_pipeline/train_model.py\n"
-        "// Real trained Gradient Boosting Decision Tree Ensemble (95 trees) for AuraAI Kazakhstan\n"
-        f"window.AURA_ML_MODEL = {json.dumps(payload, ensure_ascii=False)};\n\n"
-        "window.predictPM25WithGBM = function(featureObj) {\n"
-        "  const m = window.AURA_ML_MODEL;\n"
+        "// Автоматически сгенерировано скриптом ml_pipeline/train_model.py\n"
+        "// Ансамбль VortexPredict (100 деревьев, max_depth=5), обученный на реальном архиве CAMS / Open-Meteo\n"
+        f"window.VORTEX_ML_ENGINE = {json.dumps(payload, ensure_ascii=False)};\n\n"
+        "window.predictPM25WithVortexGBM = function(featureObj) {\n"
+        "  const m = window.VORTEX_ML_ENGINE;\n"
+        "  if (!m || !Array.isArray(m.trees)) return null;\n"
         "  const x = m.features.map(f => Number(featureObj[f] ?? 0));\n"
         "  let score = m.base_score;\n"
         "  const lr = m.learning_rate;\n"
         "  for (let t = 0; t < m.trees.length; t++) {\n"
         "    const nodes = m.trees[t];\n"
         "    let idx = 0;\n"
-        "    while (nodes[idx][0] !== -1) {\n"
+        "    while (idx >= 0 && idx < nodes.length && nodes[idx][0] !== -1) {\n"
         "      idx = x[nodes[idx][2]] <= nodes[idx][3] ? nodes[idx][0] : nodes[idx][1];\n"
         "    }\n"
         "    score += lr * nodes[idx][4];\n"
         "  }\n"
-        "  return Math.max(5.0, Math.round(score * 10) / 10);\n"
+        "  return Math.max(3.0, Math.round(score * 10) / 10);\n"
         "};\n"
     )
     out_path.write_text(js_code, encoding="utf-8")
@@ -210,39 +244,37 @@ def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("[1/4] Generating calibrated Kazakhstan air quality dataset (8,400 hourly rows)...")
-    df = build_kazakhstan_dataset(n_samples_per_city=1400, seed=2026)
+    print(
+        f"[1/4] Загрузка реального почасового архива Open-Meteo / CAMS для Алматы ({START_DATE} .. {END_DATE})..."
+    )
+    df = fetch_real_historical_data()
 
     csv_path = DATA_DIR / "kz_air_quality_dataset.csv"
     df.to_csv(csv_path, index=False, encoding="utf-8")
-    print(f"      Saved CSV -> {csv_path} ({len(df)} rows)")
+    print(f"      Датасет сохранён -> {csv_path} ({len(df)} реальных почасовых наблюдений)")
 
-    # Chronological 80/20 split per city
-    train_parts, test_parts = [], []
-    for _, cdf in df.groupby("city", sort=False):
-        split_idx = int(len(cdf) * 0.80)
-        train_parts.append(cdf.iloc[:split_idx])
-        test_parts.append(cdf.iloc[split_idx:])
+    X = df[FEATURE_COLUMNS]
+    y = df["pm2_5"]
 
-    train_df = pd.concat(train_parts, ignore_index=True)
-    test_df = pd.concat(test_parts, ignore_index=True)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=RANDOM_STATE
+    )
 
-    X_train, y_train = train_df[FEATURE_COLUMNS], train_df["pm25"]
-    X_test, y_test = test_df[FEATURE_COLUMNS], test_df["pm25"]
-
-    print("[2/4] Benchmarking ML architectures on chronological holdout test set...")
+    print(
+        f"[2/4] Обучение и валидация моделей (n_estimators={N_ESTIMATORS}, max_depth={MAX_DEPTH}, random_state={RANDOM_STATE})..."
+    )
     candidates = {
         "RidgeLinearBaseline": Ridge(alpha=1.0),
         "RandomForestRegressor": RandomForestRegressor(
-            n_estimators=100, max_depth=11, min_samples_leaf=4, random_state=42, n_jobs=-1
+            n_estimators=N_ESTIMATORS,
+            max_depth=MAX_DEPTH,
+            random_state=RANDOM_STATE,
+            n_jobs=-1,
         ),
         "GradientBoostingRegressor": GradientBoostingRegressor(
-            n_estimators=125,
-            learning_rate=0.075,
-            max_depth=5,
-            subsample=0.85,
-            min_samples_leaf=6,
-            random_state=42,
+            n_estimators=N_ESTIMATORS,
+            max_depth=MAX_DEPTH,
+            random_state=RANDOM_STATE,
         ),
     }
 
@@ -260,35 +292,59 @@ def main() -> None:
             "R2_score": round(r2, 4),
         }
         trained[name] = model
-        print(f"      * {name:26s} | R2 = {r2:.4f} | MAE = {mae:.2f} ug/m3 | RMSE = {rmse:.2f} ug/m3")
+        print(
+            f"      * {name:26s} | R2 = {r2:.4f} | MAE = {mae:.2f} мкг/м³ | RMSE = {rmse:.2f} мкг/м³"
+        )
 
     gbm = trained["GradientBoostingRegressor"]
     importances = {
-        feat: round(float(imp * 100), 2)
+        feat: round(float(imp * 100.0), 2)
         for feat, imp in sorted(
             zip(FEATURE_COLUMNS, gbm.feature_importances_),
-            key=lambda x: x[1],
+            key=lambda item: item[1],
             reverse=True,
         )
     }
 
     metrics_report = {
+        "project": "VORTEX Kazakhstan",
+        "model_name": "VortexPredict GradientBoostingRegressor",
+        "data_source": "Open-Meteo Air Quality API (Copernicus CAMS) + Open-Meteo Archive API (ERA5)",
+        "location": {
+            "city": "Almaty",
+            "latitude": ALMATY_LAT,
+            "longitude": ALMATY_LON,
+            "timezone": "Asia/Almaty",
+        },
+        "period": {
+            "start_date": START_DATE,
+            "end_date": END_DATE,
+        },
+        "hyperparameters": {
+            "n_estimators": N_ESTIMATORS,
+            "max_depth": MAX_DEPTH,
+            "learning_rate": float(gbm.learning_rate),
+            "random_state": RANDOM_STATE,
+        },
         "dataset_rows": int(len(df)),
-        "train_rows": int(len(train_df)),
-        "test_rows": int(len(test_df)),
-        "cities": list(CITY_PROFILES.keys()),
+        "train_rows": int(len(X_train)),
+        "test_rows": int(len(X_test)),
+        "target": "pm2_5",
         "features": FEATURE_COLUMNS,
         "models": results,
         "feature_importances": importances,
     }
 
     metrics_path = ARTIFACTS_DIR / "evaluation_metrics.json"
-    metrics_path.write_text(json.dumps(metrics_report, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"[3/4] Saved evaluation metrics -> {metrics_path}")
+    metrics_path.write_text(
+        json.dumps(metrics_report, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    print(f"[3/4] Метрики валидации сохранены -> {metrics_path}")
 
-    js_model_path = ARTIFACTS_DIR / "aura_gbm_model.js"
-    export_gbm_to_js(gbm, metrics_report, js_model_path)
-    print(f"[4/4] Exported {gbm.n_estimators} GBM trees -> {js_model_path}")
+    js_model_path = ARTIFACTS_DIR / "vortex_gbm_model.js"
+    export_vortex_gbm_to_js(gbm, metrics_report, js_model_path)
+    print(f"[4/4] Экспортировано {gbm.n_estimators} деревьев (max_depth={gbm.max_depth}) -> {js_model_path}")
 
 
 if __name__ == "__main__":
