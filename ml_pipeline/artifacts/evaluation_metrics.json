@@ -1,52 +1,76 @@
 {
-  "dataset_rows": 8400,
-  "train_rows": 6720,
-  "test_rows": 1680,
-  "cities": [
-    "almaty",
-    "astana",
-    "oskemen",
-    "karaganda",
-    "temirtau",
-    "shymkent"
-  ],
+  "project": "VORTEX Kazakhstan",
+  "model_name": "VortexPredict GradientBoostingRegressor",
+  "data_source": "Open-Meteo Air Quality API (Copernicus CAMS) + Open-Meteo Archive API (ERA5)",
+  "location": {
+    "city": "Almaty",
+    "latitude": 43.2389,
+    "longitude": 76.8897,
+    "timezone": "Asia/Almaty"
+  },
+  "period": {
+    "start_date": "2025-12-01",
+    "end_date": "2026-02-28"
+  },
+  "hyperparameters": {
+    "n_estimators": 100,
+    "max_depth": 5,
+    "learning_rate": 0.1,
+    "random_state": 42
+  },
+  "dataset_rows": 2160,
+  "train_rows": 1728,
+  "test_rows": 432,
+  "target": "pm2_5",
   "features": [
-    "temperature",
-    "wind_speed",
-    "inversion_height",
-    "humidity",
+    "temperature_2m",
+    "wind_speed_ms",
+    "surface_pressure",
+    "carbon_monoxide",
+    "nitrogen_dioxide",
     "hour_of_day",
+    "day_of_year",
     "is_weekend",
-    "coal_abatement_pct",
-    "nmu_abatement_pct",
-    "basin_trapping_idx"
+    "inversion_height_m",
+    "temp_24h_mean",
+    "pressure_24h_mean",
+    "co_6h_mean",
+    "no2_6h_mean",
+    "co_24h_mean",
+    "no2_24h_mean"
   ],
   "models": {
     "RidgeLinearBaseline": {
-      "MAE_ug_m3": 21.29,
-      "RMSE_ug_m3": 29.33,
-      "R2_score": 0.604
+      "MAE_ug_m3": 7.16,
+      "RMSE_ug_m3": 9.85,
+      "R2_score": 0.605
     },
     "RandomForestRegressor": {
-      "MAE_ug_m3": 8.51,
-      "RMSE_ug_m3": 12.32,
-      "R2_score": 0.9301
+      "MAE_ug_m3": 6.81,
+      "RMSE_ug_m3": 9.33,
+      "R2_score": 0.6462
     },
     "GradientBoostingRegressor": {
-      "MAE_ug_m3": 5.63,
-      "RMSE_ug_m3": 7.96,
-      "R2_score": 0.9709
+      "MAE_ug_m3": 4.6,
+      "RMSE_ug_m3": 6.37,
+      "R2_score": 0.8349
     }
   },
   "feature_importances": {
-    "inversion_height": 46.1,
-    "wind_speed": 19.82,
-    "hour_of_day": 13.32,
-    "coal_abatement_pct": 10.59,
-    "temperature": 6.72,
-    "nmu_abatement_pct": 2.68,
-    "basin_trapping_idx": 0.51,
-    "humidity": 0.2,
-    "is_weekend": 0.07
+    "nitrogen_dioxide": 45.09,
+    "hour_of_day": 12.0,
+    "carbon_monoxide": 8.56,
+    "temp_24h_mean": 4.85,
+    "no2_24h_mean": 4.66,
+    "surface_pressure": 4.57,
+    "pressure_24h_mean": 4.56,
+    "co_24h_mean": 4.36,
+    "day_of_year": 3.46,
+    "no2_6h_mean": 2.64,
+    "co_6h_mean": 1.89,
+    "inversion_height_m": 1.47,
+    "temperature_2m": 1.2,
+    "wind_speed_ms": 0.54,
+    "is_weekend": 0.15
   }
 }
