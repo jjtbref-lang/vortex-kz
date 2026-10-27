@@ -753,6 +753,18 @@
   let compareChart = null;
   let miniChart = null;
   let toastTimer = null;
+  const mobUI = {
+    handle: null,
+    dot: null,
+    title: null,
+    sub: null,
+    searchBtn: null,
+    searchLbl: null,
+    meteoBtn: null,
+    meteoLbl: null,
+    meteoBar: null,
+    layersBar: null
+  };
 
   function pmToAqi(pm) {
     const c = Math.max(0, pm);
@@ -1008,9 +1020,14 @@
     return { base, cur, pct, tonnes, active };
   }
 
-  // Сдвиг центра камеры с учётом ширины правой панели
+  // Сдвиг центра камеры с учётом правой панели или нижней мобильной шторки
   function shiftedLatLng(latlng, zoom) {
-    if (!map || window.innerWidth <= 920 || state.collapsed) return latlng;
+    if (!map) return latlng;
+    if (window.innerWidth <= 768) {
+      const pt = map.project(latlng, zoom);
+      return map.unproject(L.point(pt.x, pt.y + 18), zoom);
+    }
+    if (window.innerWidth <= 920 || state.collapsed) return latlng;
     const pt = map.project(latlng, zoom);
     return map.unproject(L.point(pt.x + 165, pt.y + 8), zoom);
   }
@@ -1683,6 +1700,13 @@
 
     renderDistrictChips(city);
 
+    if (window.innerWidth <= 768) {
+      const dw = document.getElementById('district-widget');
+      if (dw) dw.classList.remove('mob-open');
+      if (mobUI.searchBtn) mobUI.searchBtn.classList.remove('active');
+      setSheetExpanded(false);
+    }
+
     if (found.isPost) {
       const node = stationNodes.find(n => n.st.id === found.id);
       if (node && map) {
@@ -1767,6 +1791,7 @@
       state.pickMode = false;
       const btn = document.getElementById('btn-pick-map');
       if (btn) btn.classList.remove('active');
+      if (window.innerWidth <= 768) setSheetExpanded(true);
     }
     switchTab('compare');
     refreshUI();
@@ -1778,6 +1803,7 @@
       state.compareA = postId;
     }
     if (map) map.closePopup();
+    if (window.innerWidth <= 768) setSheetExpanded(true);
     switchTab('compare');
     refreshUI();
   };
@@ -2472,6 +2498,7 @@
 
     renderTimelineTicks();
     updateForecastCharts(city);
+    syncMobileUI(city, snap, win);
   }
 
   function selectCity(cityId) {
@@ -2880,6 +2907,9 @@
         state.pickMode = !state.pickMode;
         state.pickNextSlot = 'a';
         btnPick.classList.toggle('active', state.pickMode);
+        if (state.pickMode && window.innerWidth <= 768) {
+          setSheetExpanded(false);
+        }
         refreshUI();
       });
     }
@@ -3090,8 +3120,192 @@
     }
   }
 
+  // Мобильная шторка Bottom Sheet и раскрывающиеся чипсы (@media <= 768px)
+  function setSheetExpanded(expanded) {
+    const panel = document.getElementById('sidebar');
+    if (!panel) return;
+    const isExp = Boolean(expanded);
+    panel.classList.toggle('expanded', isExp);
+    document.body.classList.toggle('v-sheet-open', isExp);
+    if (mobUI.handle) mobUI.handle.setAttribute('aria-expanded', String(isExp));
+
+    if (isExp) {
+      setTimeout(() => {
+        if (mainChart) mainChart.resize();
+        if (compareChart) compareChart.resize();
+        if (miniChart) miniChart.resize();
+      }, 60);
+    }
+  }
+
+  function syncMobileUI(city, snap, win) {
+    const kz = state.lang === 'kz';
+    const cName = kz ? city.nameKz : city.nameRu;
+
+    if (mobUI.dot) {
+      mobUI.dot.style.background = snap.meta.hex;
+      mobUI.dot.style.boxShadow = `0 0 9px ${snap.meta.hex}`;
+    }
+    if (mobUI.title) {
+      const shortStatus = snap.meta.title.replace(/\s*\([^)]*\)/, '');
+      mobUI.title.textContent = `${cName}: AQI ${snap.cityAQI} • ${shortStatus}`;
+    }
+    if (mobUI.sub) {
+      mobUI.sub.textContent = kz
+        ? `PM2.5 ${snap.meanPM25.toFixed(1)} • H_inv ${snap.met.invM} м • Терезе ${win.rangeStr}`
+        : `PM2.5 ${snap.meanPM25.toFixed(1)} • H_inv ${snap.met.invM} м • Окно ${win.rangeStr}`;
+    }
+    if (mobUI.searchLbl) {
+      const items = getSearchItems(city);
+      const act = state.activeDistrictId ? items.find(x => x.id === state.activeDistrictId) : null;
+      mobUI.searchLbl.textContent = act ? act.name : dict[state.lang].searchDistrictLabel;
+    }
+    if (mobUI.meteoLbl) {
+      mobUI.meteoLbl.textContent = `${snap.met.windMs} м/с • H_inv ${snap.met.invM} м`;
+    }
+  }
+
+  function initMobileSheet() {
+    if (typeof document.createElement !== 'function') return;
+
+    const panel = document.getElementById('sidebar');
+    if (panel) {
+      const handle = document.createElement('div');
+      handle.className = 'v-sheet-handle';
+      handle.setAttribute('role', 'button');
+      handle.setAttribute('tabindex', '0');
+      handle.setAttribute('aria-expanded', 'false');
+      handle.innerHTML = `
+        <div class="v-sheet-pill"></div>
+        <div class="v-sheet-row">
+          <div class="v-sheet-info">
+            <span class="v-sheet-dot"></span>
+            <div class="v-sheet-texts">
+              <div class="v-sheet-title">Алматы: AQI 228 • Опасный смог</div>
+              <div class="v-sheet-sub">PM2.5 178.1 • H_inv 193 м</div>
+            </div>
+          </div>
+          <span class="v-sheet-arrow" aria-hidden="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 15l7-7 7 7" />
+            </svg>
+          </span>
+        </div>
+      `;
+
+      if (panel.firstChild) panel.insertBefore(handle, panel.firstChild);
+      else panel.appendChild(handle);
+
+      mobUI.handle = handle;
+      mobUI.dot = handle.querySelector('.v-sheet-dot');
+      mobUI.title = handle.querySelector('.v-sheet-title');
+      mobUI.sub = handle.querySelector('.v-sheet-sub');
+
+      handle.addEventListener('click', () => {
+        setSheetExpanded(!panel.classList.contains('expanded'));
+      });
+
+      let touchStartY = null;
+      let touchOnHandle = false;
+
+      panel.addEventListener(
+        'touchstart',
+        e => {
+          if (!e.touches || !e.touches.length) return;
+          touchStartY = e.touches[0].clientY;
+          touchOnHandle = Boolean(handle.contains && handle.contains(e.target));
+        },
+        { passive: true }
+      );
+
+      panel.addEventListener(
+        'touchend',
+        e => {
+          if (touchStartY === null || !e.changedTouches || !e.changedTouches.length) return;
+          const dy = e.changedTouches[0].clientY - touchStartY;
+          touchStartY = null;
+
+          if (dy < -28 && !panel.classList.contains('expanded')) {
+            setSheetExpanded(true);
+          } else if (dy > 32 && panel.classList.contains('expanded') && (touchOnHandle || (panel.scrollTop || 0) <= 2)) {
+            setSheetExpanded(false);
+          }
+        },
+        { passive: true }
+      );
+    }
+
+    const stack = document.getElementById('left-stack');
+    const distWidget = document.getElementById('district-widget');
+    if (stack && stack.children && stack.children.length >= 3) {
+      mobUI.meteoBar = stack.children[1];
+      mobUI.layersBar = stack.children[2];
+      if (mobUI.meteoBar && mobUI.meteoBar.classList) mobUI.meteoBar.classList.add('v-meteo-bar');
+      if (mobUI.layersBar && mobUI.layersBar.classList) mobUI.layersBar.classList.add('v-layers-bar');
+
+      const chipsRow = document.createElement('div');
+      chipsRow.className = 'v-mob-chips';
+      chipsRow.innerHTML = `
+        <button type="button" class="v-mob-chip v-surface" data-mob-act="search">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#22d3ee" stroke-width="2.3">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35m1.85-5.15a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <span class="v-mob-search-lbl">Поиск района</span>
+        </button>
+        <button type="button" class="v-mob-chip v-surface" data-mob-act="meteo">
+          <span style="width:7px;height:7px;border-radius:9999px;background:#06b6d4;display:inline-block;"></span>
+          <span class="v-mob-meteo-lbl">1.1 м/с • H_inv 185 м</span>
+        </button>
+        <button type="button" class="v-mob-chip v-surface" data-mob-act="about" aria-label="О системе">ℹ</button>
+      `;
+
+      stack.insertBefore(chipsRow, stack.firstChild);
+
+      mobUI.searchBtn = chipsRow.querySelector('[data-mob-act="search"]');
+      mobUI.searchLbl = chipsRow.querySelector('.v-mob-search-lbl');
+      mobUI.meteoBtn = chipsRow.querySelector('[data-mob-act="meteo"]');
+      mobUI.meteoLbl = chipsRow.querySelector('.v-mob-meteo-lbl');
+      const aboutBtn = chipsRow.querySelector('[data-mob-act="about"]');
+
+      if (mobUI.searchBtn && distWidget) {
+        mobUI.searchBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          const open = distWidget.classList.toggle('mob-open');
+          mobUI.searchBtn.classList.toggle('active', open);
+          if (open) {
+            if (mobUI.meteoBar) mobUI.meteoBar.classList.remove('mob-open');
+            if (mobUI.layersBar) mobUI.layersBar.classList.remove('mob-open');
+            if (mobUI.meteoBtn) mobUI.meteoBtn.classList.remove('active');
+            const inp = document.getElementById('district-input');
+            if (inp && inp.focus) inp.focus();
+          }
+        });
+      }
+
+      if (mobUI.meteoBtn) {
+        mobUI.meteoBtn.addEventListener('click', () => {
+          const open = mobUI.meteoBar ? mobUI.meteoBar.classList.toggle('mob-open') : false;
+          if (mobUI.layersBar) mobUI.layersBar.classList.toggle('mob-open', open);
+          mobUI.meteoBtn.classList.toggle('active', open);
+          if (open && distWidget) {
+            distWidget.classList.remove('mob-open');
+            if (mobUI.searchBtn) mobUI.searchBtn.classList.remove('active');
+          }
+        });
+      }
+
+      if (aboutBtn) {
+        aboutBtn.addEventListener('click', () => {
+          const m = document.getElementById('welcome-modal');
+          if (m) m.classList.remove('hidden');
+        });
+      }
+    }
+  }
+
   function initVortex() {
     loadTelegramState();
+    initMobileSheet();
     initMap();
     initCharts();
     bindAllEvents();
