@@ -834,24 +834,59 @@
   }
 
   function evalTreeEnsemble(temp, wind, invH, hour, coalPct, trafPct, trap) {
-    const mdl = window['AURA_ML_MODEL'];
+    const mdl = window.VORTEX_ML_ENGINE;
     if (!mdl || !Array.isArray(mdl.trees)) return null;
-    const feats = [temp, wind, invH, 76, hour, 0, coalPct, trafPct, trap];
-    const lr = mdl.learning_rate || 0.075;
-    let out = mdl.base_score || 58.6;
-    for (let i = 0; i < mdl.trees.length; i++) {
-      const tree = mdl.trees[i];
-      let n = 0;
-      while (n >= 0 && n < tree.length) {
-        const row = tree[n];
-        if (row[0] === -1) {
-          out += lr * row[4];
-          break;
+
+    // Расчёт физических признаков CAMS и метеоархива для клиентского инференса VortexPredict
+    const stoveWave = 0.55 + 0.45 * bellCurve(hour, 8.5, 1.8) + 0.95 * bellCurve(hour, 21.0, 2.3);
+    const rushWave = 0.60 + 0.55 * bellCurve(hour, 8.5, 1.6) + 0.65 * bellCurve(hour, 18.5, 2.0);
+    const coldBoost = Math.max(0.65, Math.min(1.55, (12 - temp) / 14));
+    const invBoost = Math.max(0.65, Math.min(1.65, 290 / Math.max(130, invH)));
+    const coalFactor = Math.max(0.32, 1 - 0.58 * (coalPct / 100));
+    const trafFactor = Math.max(0.38, 1 - 0.52 * (trafPct / 100));
+
+    const surfacePressure = Math.round((926 + Math.max(0, 280 - invH) * 0.045 - wind * 1.4) * 10) / 10;
+    const coNow = Math.round(920 * stoveWave * coldBoost * invBoost * coalFactor);
+    const no2Now = +(28 * rushWave * invBoost * trafFactor).toFixed(1);
+    const coMean24 = Math.round(980 * coldBoost * coalFactor);
+    const no2Mean24 = +(31 * trafFactor).toFixed(1);
+
+    const featureObj = {
+      temperature_2m: temp,
+      wind_speed_ms: wind,
+      surface_pressure: surfacePressure,
+      carbon_monoxide: coNow,
+      nitrogen_dioxide: no2Now,
+      hour_of_day: hour,
+      day_of_year: 18,
+      is_weekend: 0,
+      inversion_height_m: invH,
+      temp_24h_mean: +(temp - 0.8).toFixed(1),
+      pressure_24h_mean: surfacePressure,
+      co_6h_mean: Math.round(0.65 * coNow + 0.35 * coMean24),
+      no2_6h_mean: +(0.65 * no2Now + 0.35 * no2Mean24).toFixed(1),
+      co_24h_mean: coMean24,
+      no2_24h_mean: no2Mean24
+    };
+
+    let camsBg;
+    if (typeof window.predictPM25WithVortexGBM === 'function') {
+      camsBg = window.predictPM25WithVortexGBM(featureObj);
+    } else {
+      const feats = mdl.features.map(f => Number(featureObj[f] ?? 0));
+      const lr = mdl.learning_rate || 0.1;
+      let out = mdl.base_score || 33.03;
+      for (let i = 0; i < mdl.trees.length; i++) {
+        const tree = mdl.trees[i];
+        let n = 0;
+        while (n >= 0 && n < tree.length && tree[n][0] !== -1) {
+          n = feats[tree[n][2]] <= tree[n][3] ? tree[n][0] : tree[n][1];
         }
-        n = feats[row[2]] <= row[3] ? row[0] : row[1];
+        out += lr * tree[n][4];
       }
+      camsBg = Math.max(3.0, out);
     }
-    return Math.max(4, out);
+    return camsBg !== null ? Math.max(4.0, camsBg * 1.55 * trap) : null;
   }
 
   function stepToClock(step) {
