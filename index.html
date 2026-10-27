@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>VORTEX — Геомониторинг смога и температурной инверсии РК</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <div class="vortex-app no-print">
+
+    <div id="map" aria-label="Карта мониторинга воздуха Казахстана"></div>
+    <canvas id="smog-canvas"></canvas>
+    <div class="v-vignette"></div>
+
+    <!-- Верхняя навигационная панель -->
+    <header id="header-bar" class="v-nav v-surface">
+      <div class="flex items-center gap-2.5 shrink-0">
+        <div class="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-400/35 flex items-center justify-center shadow-[0_0_18px_rgba(6,182,212,0.22)]">
+          <svg class="w-5 h-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3c4.97 0 9 4.03 9 9 0 3.87-2.44 7.17-5.87 8.44M12 21c-4.97 0-9-4.03-9-9 0-3.87 2.44-7.17 5.87-8.44M12 8a4 4 0 104 4 4 4 0 00-4-4zm0 2a2 2 0 110 4 2 2 0 010-4z" />
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="font-extrabold text-[15px] tracking-wider text-white">VORTEX</span>
+            <span class="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-cyan-500/12 text-cyan-300 border border-cyan-500/30">
+              <span class="v-pulse"></span>
+              <span data-i18n="liveBadge">Онлайн • 48ч</span>
+            </span>
+          </div>
+          <div class="text-[10.5px] text-slate-400 hidden 2xl:block" data-i18n="brandSub">
+            Индустриальная система прогноза инверсии и PM2.5
+          </div>
+        </div>
+      </div>
+
+      <nav id="city-selector" aria-label="Города Казахстана"></nav>
+
+      <div class="flex items-center gap-1.5 shrink-0">
+        <button id="btn-tg-open" class="v-btn v-btn-cyan" title="Утренние и вечерние предупреждения в Telegram">
+          <svg class="w-3.5 h-3.5 text-cyan-300" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M21.94 4.66l-3.02 14.27c-.22 1-.82 1.24-1.66.77l-4.58-3.38-2.21 2.13c-.24.24-.45.45-.92.45l.33-4.67 8.5-7.68c.37-.33-.08-.51-.57-.18L7.3 13l-4.52-1.41c-.98-.31-1-.98.21-1.45L20.66 3.3c.82-.3 1.54.19 1.28 1.36z" />
+          </svg>
+          <span class="hidden md:inline" data-i18n="btnTelegram">Telegram-алерты</span>
+          <span id="tg-active-dot" class="w-2 h-2 rounded-full bg-[#10b981] hidden"></span>
+        </button>
+
+        <button id="btn-guide-open" class="v-btn" title="Принцип работы и онбординг">
+          <svg class="w-3.5 h-3.5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span class="hidden lg:inline" data-i18n="btnAbout">О системе</span>
+        </button>
+
+        <button id="btn-tour-start" class="v-btn hidden xl:inline-flex">
+          <span data-i18n="btnTour">Тур</span>
+        </button>
+
+        <button id="btn-pdf" class="v-btn" title="Официальная печатная сводка">
+          <svg class="w-3.5 h-3.5 text-sky-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          <span class="hidden xl:inline" data-i18n="btnPdf">Сводка PDF</span>
+          <span class="xl:hidden">PDF</span>
+        </button>
+
+        <div class="flex items-center bg-[#0a0f1d] p-0.5 rounded-lg border border-slate-700/60 text-xs">
+          <button id="btn-lang-ru" class="px-2 py-1 rounded-md font-semibold bg-cyan-500/20 text-cyan-300 transition">RU</button>
+          <button id="btn-lang-kz" class="px-2 py-1 rounded-md font-medium text-slate-400 hover:text-white transition">KZ</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Поиск микрорайона, метеоданные и слои карты -->
+    <div id="left-stack">
+      <div id="district-widget" class="v-surface v-search-box">
+        <div class="flex items-center justify-between mb-1.5">
+          <span class="text-[10.5px] font-bold uppercase tracking-wider text-cyan-400" data-i18n="searchDistrictLabel">
+            Поиск района
+          </span>
+          <span class="text-[10px] text-slate-400" data-i18n="searchZoomHint">зум к кварталу</span>
+        </div>
+
+        <div class="relative">
+          <svg class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35m1.85-5.15a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input
+            id="district-input"
+            type="text"
+            autocomplete="off"
+            class="v-input"
+            placeholder="Найти микрорайон (Самал, Орбита...)"
+            data-i18n-placeholder="searchPlaceholder"
+          />
+          <button id="btn-district-clear" class="hidden absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-white">✕</button>
+        </div>
+
+        <div id="district-chips" class="flex flex-wrap gap-1 mt-2"></div>
+
+        <div id="district-dropdown" class="v-surface hidden"></div>
+      </div>
+
+      <div class="v-surface rounded-xl px-3 py-2 flex items-center justify-between text-xs">
+        <div class="flex items-center gap-1.5">
+          <span class="text-slate-400" data-i18n="hudWind">Ветер:</span>
+          <span id="hud-wind-val" class="v-mono font-bold text-cyan-300">1.1 м/с</span>
+        </div>
+        <div class="w-px h-3.5 bg-slate-700/70"></div>
+        <div class="flex items-center gap-1.5">
+          <span class="text-slate-400" data-i18n="hudInv">Инверсия:</span>
+          <span id="hud-inv-val" class="v-mono font-bold text-amber-300">185 м</span>
+        </div>
+        <div class="w-px h-3.5 bg-slate-700/70"></div>
+        <span id="hud-temp-val" class="v-mono font-bold text-slate-200">-7°C</span>
+      </div>
+
+      <div class="flex flex-wrap gap-1.5">
+        <button id="btn-layer-dome" class="v-chip v-surface active">
+          <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+          <span data-i18n="layerDome">Купол смога</span>
+        </button>
+        <button id="btn-layer-wind" class="v-chip v-surface active">
+          <span class="w-2 h-2 rounded-full bg-sky-400"></span>
+          <span data-i18n="layerWind">Потоки ветра</span>
+        </button>
+        <button id="btn-layer-sat" class="v-chip v-surface">
+          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+          <span data-i18n="layerSat">Спутник</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Шкала индексов AQI -->
+    <div id="aqi-legend" class="v-surface">
+      <div class="text-[9.5px] uppercase tracking-wider font-bold text-slate-400 mb-1" data-i18n="scaleCaption">
+        Индекс качества воздуха AQI
+      </div>
+      <div class="flex items-center gap-2.5 text-[10.5px] font-medium text-slate-300">
+        <span class="inline-flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-full bg-[#10b981] inline-block"></i>0–50</span>
+        <span class="inline-flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-full bg-[#f59e0b] inline-block"></i>51–120</span>
+        <span class="inline-flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-full bg-[#e11d48] inline-block"></i>121–200</span>
+        <span class="inline-flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-full bg-[#881337] border border-rose-400/50 inline-block"></i>201+</span>
+      </div>
+    </div>
+
+    <!-- Правая аналитическая панель VORTEX -->
+    <aside id="sidebar" class="v-panel">
+      <button id="btn-panel-collapse" title="Свернуть панель">
+        <svg id="panel-chevron" class="w-4 h-4 transition-transform duration-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
+
+      <div class="px-4 pt-3.5 pb-2.5 border-b border-slate-800 shrink-0">
+        <div class="flex items-center justify-between gap-2 mb-2.5">
+          <div class="min-w-0">
+            <h1 id="panel-city-title" class="text-[15px] font-bold text-white truncate">Алматы</h1>
+            <p id="panel-city-sub" class="text-[11px] text-slate-400 truncate">Предгорная котловина Заилийского Алатау</p>
+          </div>
+          <span id="panel-time-badge" class="v-mono text-[11px] font-semibold px-2.5 py-0.5 rounded-md bg-cyan-500/12 text-cyan-300 border border-cyan-500/30 shrink-0">
+            +0ч • 20:00
+          </span>
+        </div>
+
+        <div class="v-tabs" role="tablist">
+          <button class="v-tab active" data-tab="summary" data-i18n="tabSummary">Сводка</button>
+          <button class="v-tab" data-tab="forecast" data-i18n="tabForecast">Прогноз</button>
+          <button class="v-tab" data-tab="compare" data-i18n="tabCompare">Сравнить</button>
+          <button class="v-tab" data-tab="whatif" data-i18n="tabWhatIf">Что если?</button>
+          <button class="v-tab" data-tab="guide" data-i18n="tabGuide">Гид</button>
+        </div>
+      </div>
+
+      <div class="v-panel-body">
+
+        <!-- Вкладка 1: Сводка -->
+        <section id="view-summary" class="space-y-3">
+          <div class="v-card p-3.5">
+            <div class="flex items-center gap-3.5">
+              <div class="relative w-[106px] h-[86px] shrink-0 flex flex-col items-center justify-end">
+                <svg class="w-[106px] h-[66px] overflow-visible" viewBox="0 0 120 72">
+                  <path d="M 12 62 A 48 48 0 0 1 108 62" fill="none" stroke="rgba(148,163,184,0.16)" stroke-width="9" stroke-linecap="round" />
+                  <path id="aqi-gauge-arc" d="M 12 62 A 48 48 0 0 1 108 62" fill="none" stroke="#881337" stroke-width="9" stroke-linecap="round" stroke-dasharray="150.8" stroke-dashoffset="38" style="transition: stroke-dashoffset 0.3s ease, stroke 0.3s ease;" />
+                </svg>
+                <div class="-mt-7 text-center">
+                  <div id="summary-aqi" class="v-mono text-[29px] font-extrabold leading-none text-white">228</div>
+                  <div class="text-[9.5px] uppercase tracking-wider font-semibold text-slate-400 mt-0.5">US AQI</div>
+                </div>
+              </div>
+
+              <div class="flex-1 min-w-0">
+                <div id="summary-badge" class="inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] font-bold mb-1.5">
+                  Опасный смог
+                </div>
+                <p id="summary-text" class="text-[11.5px] text-slate-300 leading-snug">
+                  Низкая крышка инверсии запирает дым печей и выхлопы у земли.
+                </p>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-4 gap-1.5 mt-3 pt-3 border-t border-slate-800 text-center">
+              <div class="rounded-lg bg-[#0a0f1d]/80 px-1.5 py-1.5 border border-slate-800">
+                <div class="text-[9.5px] text-slate-400">PM2.5</div>
+                <div id="m-pm25" class="v-mono text-xs font-bold text-white mt-0.5">168.0</div>
+                <div class="text-[9px] text-slate-500" data-i18n="unitUg">мкг/м³</div>
+              </div>
+              <div class="rounded-lg bg-[#0a0f1d]/80 px-1.5 py-1.5 border border-slate-800">
+                <div class="text-[9.5px] text-slate-400">PM10</div>
+                <div id="m-pm10" class="v-mono text-xs font-bold text-slate-200 mt-0.5">255</div>
+                <div class="text-[9px] text-slate-500" data-i18n="unitUg">мкг/м³</div>
+              </div>
+              <div class="rounded-lg bg-[#0a0f1d]/80 px-1.5 py-1.5 border border-slate-800">
+                <div class="text-[9.5px] text-slate-400">H_inv</div>
+                <div id="m-inv" class="v-mono text-xs font-bold text-amber-300 mt-0.5">185 м</div>
+                <div id="m-inv-state" class="text-[9px] text-rose-300">Застой</div>
+              </div>
+              <div class="rounded-lg bg-[#0a0f1d]/80 px-1.5 py-1.5 border border-slate-800">
+                <div class="text-[9.5px] text-slate-400" data-i18n="lblWind">Ветер</div>
+                <div id="m-wind" class="v-mono text-xs font-bold text-cyan-300 mt-0.5">1.1</div>
+                <div class="text-[9px] text-slate-500">м/с</div>
+              </div>
+            </div>
+          </div>
+
+          <div id="clean-win-card" class="rounded-xl p-3 bg-cyan-950/35 border border-cyan-500/30 hover:border-cyan-400/60 transition cursor-pointer group">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <div class="flex items-center gap-2">
+                  <span class="text-[10.5px] font-bold uppercase tracking-wider text-cyan-300" data-i18n="cleanWinTitle">
+                    Окно чистого воздуха
+                  </span>
+                  <span id="clean-win-aqi" class="v-mono text-[10px] font-bold px-2 py-0.5 rounded bg-[#10b981]/20 text-emerald-300 border border-[#10b981]/35">
+                    AQI 61
+                  </span>
+                </div>
+                <div id="clean-win-range" class="v-mono text-sm font-bold text-white mt-0.5">
+                  Безопасное проветривание: 13:30 – 15:30
+                </div>
+                <div id="clean-win-timer" class="text-[11px] text-slate-300 mt-0.5"></div>
+              </div>
+              <span class="text-xs font-bold text-cyan-400 group-hover:translate-x-0.5 transition mt-1">→</span>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex items-center justify-between mb-1.5">
+              <span class="text-[10.5px] font-bold uppercase tracking-wider text-slate-400" data-i18n="stationsTitle">
+                Опорные посты города
+              </span>
+              <button id="btn-jump-compare" class="text-[10.5px] font-semibold text-cyan-400 hover:text-cyan-300" data-i18n="btnOpenCompareLink">
+                Сравнить 2 поста ⇄
+              </button>
+            </div>
+            <div id="stations-list" class="space-y-1.5"></div>
+          </div>
+        </section>
+
+        <!-- Вкладка 2: Прогноз 48ч -->
+        <section id="view-forecast" class="space-y-3 hidden">
+          <div class="v-card p-3.5">
+            <div class="flex items-start justify-between gap-2 mb-2">
+              <div>
+                <h2 class="text-xs font-bold text-white" data-i18n="forecastHead">
+                  Почасовой прогноз PM2.5 на 48 часов
+                </h2>
+                <p class="text-[10.5px] text-slate-400" data-i18n="forecastSub">
+                  Расчёт высоты слоя перемешивания H_inv и ветрового сноса
+                </p>
+              </div>
+              <span class="v-mono text-[10px] px-2 py-0.5 rounded bg-cyan-500/12 text-cyan-300 border border-cyan-500/25 shrink-0">
+                R² = 0.97
+              </span>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-3 text-[10.5px] text-slate-300 mb-2">
+              <span class="inline-flex items-center gap-1.5">
+                <i class="w-3 h-0.5 bg-[#f59e0b] inline-block"></i>
+                <span data-i18n="legBase">Базовый сценарий</span>
+              </span>
+              <span class="inline-flex items-center gap-1.5">
+                <i class="w-3 h-0.5 border-t-2 border-dashed border-[#06b6d4] inline-block"></i>
+                <span data-i18n="legEco">С эко-мерами</span>
+              </span>
+              <span class="inline-flex items-center gap-1.5 text-slate-400">
+                <i class="w-2.5 h-0.5 bg-slate-500 inline-block"></i>
+                <span>ВОЗ (15)</span>
+              </span>
+            </div>
+
+            <div class="h-[190px] w-full relative">
+              <canvas id="forecast-chart"></canvas>
+            </div>
+          </div>
+
+          <div class="v-card p-3 space-y-2">
+            <div class="text-[10.5px] font-bold uppercase tracking-wider text-slate-400" data-i18n="diurnalHead">
+              Суточные фазы накопления смога
+            </div>
+            <div id="diurnal-grid" class="grid grid-cols-3 gap-1.5"></div>
+          </div>
+
+          <div class="v-card p-3 space-y-2">
+            <div class="text-[10.5px] font-bold uppercase tracking-wider text-slate-400" data-i18n="factorsHead">
+              Вклад факторов в текущий час
+            </div>
+            <div id="factors-list" class="space-y-2 text-[11px]"></div>
+          </div>
+        </section>
+
+        <!-- Вкладка 3: Сравнить районы (Пост А vs Пост Б) -->
+        <section id="view-compare" class="space-y-3 hidden">
+          <div class="v-card p-3 space-y-2.5">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-[10.5px] font-bold uppercase tracking-wider text-cyan-400" data-i18n="cmpTitle">
+                Сравнение двух районов
+              </span>
+              <button id="btn-pick-map" class="v-chip" title="Кликните по двум маркерам на карте">
+                <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+                <span data-i18n="btnPickOnMap">Выбрать на карте</span>
+              </button>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-[10px] text-slate-400 mb-1" data-i18n="cmpPostA">Пост А (первый район)</label>
+                <select id="cmp-select-a" class="v-select"></select>
+              </div>
+              <div>
+                <label class="block text-[10px] text-slate-400 mb-1" data-i18n="cmpPostB">Пост Б (второй район)</label>
+                <select id="cmp-select-b" class="v-select"></select>
+              </div>
+            </div>
+
+            <div id="cmp-pick-hint" class="hidden text-[11px] text-cyan-300 bg-cyan-950/50 border border-cyan-500/30 rounded-lg px-2.5 py-1.5"></div>
+          </div>
+
+          <div id="cmp-cards" class="grid grid-cols-2 gap-2"></div>
+
+          <div id="cmp-delta-banner" class="rounded-xl px-3 py-2.5 bg-[#0a0f1d] border border-cyan-500/30 text-xs text-slate-200"></div>
+
+          <div class="v-card p-3">
+            <div class="flex items-center justify-between gap-2 mb-1.5">
+              <span class="text-[11px] font-bold text-white" data-i18n="cmpChartTitle">
+                Динамика PM2.5 и высоты инверсии H_inv (48ч)
+              </span>
+            </div>
+            <div class="flex flex-wrap items-center gap-3 text-[10px] text-slate-300 mb-2">
+              <span class="inline-flex items-center gap-1"><i class="w-2.5 h-0.5 bg-[#e11d48] inline-block"></i><span id="leg-cmp-a">Пост А</span></span>
+              <span class="inline-flex items-center gap-1"><i class="w-2.5 h-0.5 bg-[#10b981] inline-block"></i><span id="leg-cmp-b">Пост Б</span></span>
+              <span class="inline-flex items-center gap-1"><i class="w-2.5 h-0.5 border-t border-dashed border-[#06b6d4] inline-block"></i><span data-i18n="legInvLine">Инверсия H_inv (м)</span></span>
+            </div>
+            <div class="h-[195px] w-full relative">
+              <canvas id="compare-chart"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <!-- Вкладка 4: Лаборатория "Что если?" -->
+        <section id="view-whatif" class="space-y-3 hidden">
+          <div class="rounded-xl p-3 bg-cyan-950/35 border border-cyan-500/30">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-[10.5px] font-bold uppercase tracking-wider text-cyan-300" data-i18n="simResultTag">
+                Расчёт предотвращённого ущерба
+              </span>
+              <button id="btn-sim-reset" class="text-[10.5px] font-semibold text-slate-300 hover:text-white underline" data-i18n="btnReset">
+                Сбросить
+              </button>
+            </div>
+            <div id="sim-headline" class="v-mono text-[12.5px] font-bold text-white mt-1.5 leading-snug">
+              Снижение PM2.5 на 0% | Предотвращено 0.0 т выбросов за сутки
+            </div>
+            <div id="sim-subline" class="text-[11px] text-slate-300 mt-1"></div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-1.5">
+            <button id="btn-preset-eco" class="v-card v-card-hover px-3 py-2 text-left">
+              <div class="text-[11px] font-bold text-cyan-300" data-i18n="presetEco">Пакет «EcoHeat + Транзит»</div>
+              <div class="text-[10px] text-slate-400 mt-0.5" data-i18n="presetEcoDesc">Печи 80% • Дизель -60%</div>
+            </button>
+            <button id="btn-preset-breeze" class="v-card v-card-hover px-3 py-2 text-left">
+              <div class="text-[11px] font-bold text-sky-300" data-i18n="presetWind">Горно-долинный ветер</div>
+              <div class="text-[10px] text-slate-400 mt-0.5" data-i18n="presetWindDesc">Продув 5.5 м/с (срыв инверсии)</div>
+            </button>
+          </div>
+
+          <div class="v-card p-3.5 space-y-3.5">
+            <div>
+              <div class="flex justify-between text-xs mb-1">
+                <span class="font-semibold text-slate-200" data-i18n="slWind">1. Скорость ветра (v)</span>
+                <span id="val-wind" class="v-mono font-bold text-cyan-300">1.1 м/с</span>
+              </div>
+              <input id="slider-wind" type="range" min="0.5" max="8.0" step="0.1" value="1.1" class="v-range" />
+              <div class="flex justify-between text-[10px] text-slate-500 mt-1">
+                <span data-i18n="hintCalm">0.5 м/с (штиль)</span>
+                <span data-i18n="hintBreak">4.5+ м/с (вынос смога)</span>
+                <span>8.0 м/с</span>
+              </div>
+            </div>
+
+            <div>
+              <div class="flex justify-between text-xs mb-1">
+                <span class="font-semibold text-slate-200" data-i18n="slStove">2. Эко-розжиг печей (EcoHeat)</span>
+                <span id="val-stove" class="v-mono font-bold text-emerald-300">0%</span>
+              </div>
+              <input id="slider-stove" type="range" min="0" max="100" step="5" value="0" class="v-range" />
+              <div class="flex justify-between text-[10px] text-slate-500 mt-1">
+                <span data-i18n="hintCoalBase">Обычная топка</span>
+                <span data-i18n="hintCoalMax">До -38% сажи частного сектора</span>
+              </div>
+            </div>
+
+            <div>
+              <div class="flex justify-between text-xs mb-1">
+                <span class="font-semibold text-slate-200" data-i18n="slTraffic">3. Фильтрация дизельного транзита</span>
+                <span id="val-traffic" class="v-mono font-bold text-amber-300">0%</span>
+              </div>
+              <input id="slider-traffic" type="range" min="0" max="100" step="5" value="0" class="v-range" />
+              <div class="flex justify-between text-[10px] text-slate-500 mt-1">
+                <span data-i18n="hintTrafBase">Штатный поток</span>
+                <span data-i18n="hintTrafMax">Ограничение фур в часы НМУ</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="v-card p-3">
+            <div class="text-[11px] font-semibold text-slate-300 mb-1.5" data-i18n="miniChartHead">
+              Сравнение кривых 48ч: база vs меры (мкг/м³)
+            </div>
+            <div class="h-[120px] w-full relative">
+              <canvas id="mini-chart"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <!-- Вкладка 5: Персональный гид -->
+        <section id="view-guide" class="space-y-3 hidden">
+          <div class="grid grid-cols-1 gap-1.5">
+            <button class="v-role-btn active" data-role="parents" data-i18n="roleParents">Для родителей и школ</button>
+            <button class="v-role-btn" data-role="ecoheat" data-i18n="roleEcoHeat">Для частного сектора (EcoHeat)</button>
+            <button class="v-role-btn" data-role="drivers" data-i18n="roleDrivers">Для водителей</button>
+          </div>
+
+          <div id="guide-banner" class="v-card p-3 border-l-4 border-l-cyan-400"></div>
+
+          <div id="guide-cards" class="space-y-2"></div>
+
+          <button id="btn-guide-tg" class="w-full v-btn v-btn-cyan justify-center py-2.5">
+            <span data-i18n="ctaTelegramBot">Настроить утренние и вечерние Telegram-алерты →</span>
+          </button>
+        </section>
+
+      </div>
+    </aside>
+
+    <!-- Нижняя почасовая шкала времени (0..+48ч) -->
+    <div id="timeline-bar" class="v-surface">
+      <div class="flex items-center gap-3.5">
+        <button id="btn-play" title="Запустить / остановить почасовой прогноз">
+          <svg id="ico-play" class="w-4 h-4 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+          <svg id="ico-pause" class="w-4 h-4 hidden" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+          </svg>
+        </button>
+
+        <div class="flex-1 min-w-0">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
+            <div class="flex items-center gap-2">
+              <span id="tl-clock" class="text-xs font-bold text-white">Сегодня, 20:00</span>
+              <span id="tl-status-pill" class="text-[10.5px] font-semibold px-2 py-0.5 rounded-md">
+                Опасный смог • H_inv 185 м
+              </span>
+            </div>
+            <div class="text-[11px] text-slate-400 hidden sm:block">
+              <span data-i18n="tlHorizon">Горизонт:</span>
+              <strong id="tl-step-txt" class="v-mono text-cyan-300 ml-1">+0ч / 48ч</strong>
+            </div>
+          </div>
+
+          <div class="v-track-wrap">
+            <div id="timeline-strip"></div>
+            <input id="timeline-slider" type="range" min="0" max="48" step="1" value="0" class="v-range v-timeline-slider" />
+          </div>
+
+          <div id="timeline-ticks" class="flex items-center justify-between gap-1 mt-1 overflow-x-auto"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Модальное окно онбординга VORTEX -->
+  <div id="welcome-modal" class="v-modal hidden" role="dialog" aria-modal="true">
+    <div class="v-modal-box">
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <span class="inline-flex items-center gap-2 px-2.5 py-1 rounded-md text-[11px] font-bold uppercase tracking-wider bg-cyan-500/12 text-cyan-300 border border-cyan-500/30 mb-3">
+            <span class="v-pulse"></span>
+            <span data-i18n="onbBadge">VORTEX • Инженерный экологический мониторинг РК</span>
+          </span>
+          <h2 id="welcome-title" class="text-2xl font-extrabold tracking-tight text-white" data-i18n="onbTitle">
+            Почему города Казахстана задыхаются зимой?
+          </h2>
+          <p class="text-sm text-slate-300 mt-1.5 max-w-2xl leading-relaxed" data-i18n="onbSub">
+            Платформа VORTEX объединяет расчёт температурной инверсии, ветрового потока и локальных выбросов, предупреждая о пиках смога за 48 часов.
+          </p>
+        </div>
+        <button id="btn-welcome-x" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white shrink-0">✕</button>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-5">
+        <div class="v-card p-4 border-t-2 border-t-[#e11d48]">
+          <div class="text-[11px] font-bold uppercase tracking-wider text-rose-400 mb-1" data-i18n="onb1Tag">1. Физика проблемы</div>
+          <h3 class="text-sm font-bold text-white mb-1.5" data-i18n="onb1Title">Крышка инверсии 200–300 м</h3>
+          <p class="text-xs text-slate-300 leading-relaxed" data-i18n="onb1Desc">
+            Холодный воздух в котловинах запирается тёплым слоем сверху: дым частных печей, ТЭЦ и фур концентрируется прямо на уровне дыхания.
+          </p>
+        </div>
+
+        <div class="v-card p-4 border-t-2 border-t-[#06b6d4]">
+          <div class="text-[11px] font-bold uppercase tracking-wider text-cyan-400 mb-1" data-i18n="onb2Tag">2. Технология VORTEX</div>
+          <h3 class="text-sm font-bold text-white mb-1.5" data-i18n="onb2Title">Упреждающий расчёт 48ч</h3>
+          <p class="text-xs text-slate-300 leading-relaxed" data-i18n="onb2Desc">
+            Сравнивайте районы между собой (например, Медеу и Шанырак), находите микрорайоны на карте и моделируйте эффект мер снижения выбросов.
+          </p>
+        </div>
+
+        <div class="v-card p-4 border-t-2 border-t-[#10b981]">
+          <div class="text-[11px] font-bold uppercase tracking-wider text-emerald-400 mb-1" data-i18n="onb3Tag">3. Практическая польза</div>
+          <h3 class="text-sm font-bold text-white mb-1.5" data-i18n="onb3Title">Чистое окно и Telegram-бот</h3>
+          <p class="text-xs text-slate-300 leading-relaxed" data-i18n="onb3Desc">
+            Система заранее находит дневное окно для проветривания школ и квартир и присылает утренние и вечерние сводки в Telegram.
+          </p>
+        </div>
+      </div>
+
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mt-6 pt-4 border-t border-slate-800">
+        <label class="inline-flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
+          <input id="chk-welcome-hide" type="checkbox" checked class="w-4 h-4 rounded accent-cyan-500 cursor-pointer" />
+          <span data-i18n="onbDontShow">Не показывать автоматически при следующем входе</span>
+        </label>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <button id="btn-welcome-tour" class="v-btn" data-i18n="btnStartTourModal">Пошаговый гид (4 шага)</button>
+          <button id="btn-welcome-go" class="px-5 py-2 rounded-lg text-xs font-bold text-slate-950 bg-cyan-400 hover:bg-cyan-300 transition" data-i18n="btnEnterApp">
+            Открыть карту VORTEX
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модальное окно Telegram Alert Bot -->
+  <div id="tg-modal" class="v-modal hidden" role="dialog" aria-modal="true">
+    <div class="v-modal-box" style="max-width: 660px;">
+      <div class="flex items-start justify-between gap-3 pb-4 border-b border-slate-800">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-sky-500/15 border border-sky-400/35 flex items-center justify-center text-sky-400 shrink-0">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M21.94 4.66l-3.02 14.27c-.22 1-.82 1.24-1.66.77l-4.58-3.38-2.21 2.13c-.24.24-.45.45-.92.45l.33-4.67 8.5-7.68c.37-.33-.08-.51-.57-.18L7.3 13l-4.52-1.41c-.98-.31-1-.98.21-1.45L20.66 3.3c.82-.3 1.54.19 1.28 1.36z" />
+            </svg>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h2 class="text-lg font-extrabold text-white">Telegram Alert Bot</h2>
+              <span class="v-mono text-[11px] px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">@VortexAirKZ_bot</span>
+            </div>
+            <p class="text-xs text-slate-400 mt-0.5" data-i18n="tgModalSub">
+              Персональные утренние и вечерние предупреждения о смоге и окнах проветривания
+            </p>
+          </div>
+        </div>
+        <button id="btn-tg-close" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white shrink-0">✕</button>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+        <div class="space-y-3">
+          <div>
+            <label class="block text-[11px] font-semibold text-slate-300 mb-1" data-i18n="tgCityLbl">Город мониторинга</label>
+            <select id="tg-city-select" class="v-select"></select>
+          </div>
+
+          <div>
+            <label class="block text-[11px] font-semibold text-slate-300 mb-1" data-i18n="tgDistrictLbl">Район или ближайший пост</label>
+            <select id="tg-post-select" class="v-select"></select>
+          </div>
+
+          <div>
+            <label class="block text-[11px] font-semibold text-slate-300 mb-1" data-i18n="tgHandleLbl">Ваш Telegram (@username)</label>
+            <input id="tg-username" type="text" value="@almaty_resident" class="v-input !pl-3" />
+          </div>
+
+          <div class="space-y-2 pt-1">
+            <label class="flex items-center gap-2 text-xs text-slate-200 cursor-pointer">
+              <input id="tg-chk-morning" type="checkbox" checked class="w-4 h-4 rounded accent-cyan-500" />
+              <span data-i18n="tgOptMorning">07:00 — Утренняя сводка (маршрут в школу)</span>
+            </label>
+            <label class="flex items-center gap-2 text-xs text-slate-200 cursor-pointer">
+              <input id="tg-chk-evening" type="checkbox" checked class="w-4 h-4 rounded accent-cyan-500" />
+              <span data-i18n="tgOptEvening">19:00 — Вечерний алерт инверсии и топки печей</span>
+            </label>
+            <label class="flex items-center gap-2 text-xs text-slate-200 cursor-pointer">
+              <input id="tg-chk-window" type="checkbox" checked class="w-4 h-4 rounded accent-cyan-500" />
+              <span data-i18n="tgOptWindow">За 30 мин до «Окна чистого воздуха»</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="flex flex-col justify-between bg-[#0a0f1d] border border-slate-800 rounded-xl p-3.5">
+          <div>
+            <div class="flex items-center justify-between text-[10.5px] text-slate-400 mb-2">
+              <span data-i18n="tgPreviewLabel">Предпросмотр сообщения бота</span>
+              <span class="v-mono text-cyan-400">19:00</span>
+            </div>
+            <div id="tg-preview-bubble" class="v-tg-bubble"></div>
+          </div>
+
+          <div id="tg-status-box" class="mt-3 text-[11px] text-slate-400"></div>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center justify-between gap-3 mt-5 pt-4 border-t border-slate-800">
+        <button id="btn-tg-test" class="v-btn" data-i18n="btnTgTest">Отправить тестовый алерт</button>
+        <button id="btn-tg-save" class="px-5 py-2 rounded-lg text-xs font-bold text-slate-950 bg-cyan-400 hover:bg-cyan-300 transition" data-i18n="btnTgSubscribe">
+          Подключить уведомления
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Пошаговый тур по платформе -->
+  <div id="tour-tooltip" class="hidden" role="dialog">
+    <div class="flex items-center justify-between gap-2 mb-1">
+      <span id="tour-badge" class="text-[10.5px] font-bold uppercase tracking-wider text-cyan-400">Шаг 1 / 4</span>
+      <button id="btn-tour-close" class="text-xs text-slate-400 hover:text-white">✕</button>
+    </div>
+    <h3 id="tour-title" class="text-sm font-bold text-white mb-1"></h3>
+    <p id="tour-desc" class="text-xs text-slate-300 leading-relaxed mb-3.5"></p>
+    <div class="flex items-center justify-between">
+      <div id="tour-dots" class="flex items-center gap-1.5"></div>
+      <div class="flex items-center gap-2">
+        <button id="btn-tour-prev" class="px-2.5 py-1 rounded-md text-xs font-semibold text-slate-300 bg-slate-800 border border-slate-700" data-i18n="tourBack">Назад</button>
+        <button id="btn-tour-next" class="px-3.5 py-1 rounded-md text-xs font-bold text-slate-950 bg-cyan-400 hover:bg-cyan-300" data-i18n="tourNext">Далее →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Всплывающее уведомление (симуляция пуша Telegram) -->
+  <div id="v-toast" class="v-toast hidden" role="status" aria-live="polite"></div>
+
+  <!-- Печатный отчёт А4 -->
+  <section id="print-report" aria-hidden="true"></section>
+
+  <script src="ml_pipeline/artifacts/aura_gbm_model.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

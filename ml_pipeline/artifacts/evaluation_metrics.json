@@ -1,0 +1,52 @@
+{
+  "dataset_rows": 8400,
+  "train_rows": 6720,
+  "test_rows": 1680,
+  "cities": [
+    "almaty",
+    "astana",
+    "oskemen",
+    "karaganda",
+    "temirtau",
+    "shymkent"
+  ],
+  "features": [
+    "temperature",
+    "wind_speed",
+    "inversion_height",
+    "humidity",
+    "hour_of_day",
+    "is_weekend",
+    "coal_abatement_pct",
+    "nmu_abatement_pct",
+    "basin_trapping_idx"
+  ],
+  "models": {
+    "RidgeLinearBaseline": {
+      "MAE_ug_m3": 21.29,
+      "RMSE_ug_m3": 29.33,
+      "R2_score": 0.604
+    },
+    "RandomForestRegressor": {
+      "MAE_ug_m3": 8.51,
+      "RMSE_ug_m3": 12.32,
+      "R2_score": 0.9301
+    },
+    "GradientBoostingRegressor": {
+      "MAE_ug_m3": 5.63,
+      "RMSE_ug_m3": 7.96,
+      "R2_score": 0.9709
+    }
+  },
+  "feature_importances": {
+    "inversion_height": 46.1,
+    "wind_speed": 19.82,
+    "hour_of_day": 13.32,
+    "coal_abatement_pct": 10.59,
+    "temperature": 6.72,
+    "nmu_abatement_pct": 2.68,
+    "basin_trapping_idx": 0.51,
+    "humidity": 0.2,
+    "is_weekend": 0.07
+  }
+}
